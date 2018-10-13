@@ -1,0 +1,292 @@
+---
+title: "Analytics Lab Project with Disruptive Elements GmbH: Network Twitter Analysis in R"
+author: "Anna Anisienia"
+date: "30 June 2018"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+  pdf_document:
+    keep_tex: yes
+    number_sections: yes
+---
+
+## How often people google Bitcoin and Ethereum?
+In the plot below (*and by sorting the table by hits in descending order*), we can see that the number of hits in Google Trends reached a peak during and after the Bitcoin Crash in June 2018.
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+library(gtrendsR)
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+library(DT)
+Sys.setenv(TZ="Europe/Berlin") # to be sure: time series analysis
+KEYWORDS <- c("Bitcoin", "Ethereum")
+gTrendsData <- gtrends(keyword = KEYWORDS, time = paste("2018-06-01", Sys.Date()), geo = "DE") # BTC crash 8-10.06.2018
+datTS <- gTrendsData$interest_over_time[, c("date", "hits", "keyword")]
+# Create variables for weekdays and weekends
+datTS$weekday <- lubridate::wday(datTS$date, label = TRUE, week_start = 1)
+datTS$weekend <- datTS$weekday %in% c("Sat", "Sun")
+datatable(datTS)
+```
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+ggplot(datTS, aes(x = date, y = hits, color = weekend)) + 
+    geom_line(linetype = 3) + ## 0 = blank, 1 = solid, 2 = dashed, 3 = dotted, # 4 = dotdash, 5 = longdash, 6 = twodash; default SOLID
+    geom_point(size = 2) +
+    facet_grid(keyword ~ .) +
+    labs(x = "Date", y = "Search intensity")
+```
+
+## Preprocessing for Network Analysis
+### Postgres
+The data has been obtained through streaming from Twitter API by using Python Tweepy library and self-implemented StreamListener that constantly appends new streamed data into a Postgres Database `disruptive` created on the Zeno server: `zeno.lehre.hwr-berlin.de`. Details about streaming are provided in a separate documentation.
+- for retrieval of the data from Postgres database, we use `RPostgreSQL` library and SQL queries that filter for only relevant tweets related to Bitcoin and Ethereum.
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+library("RPostgreSQL")
+drv <- dbDriver("PostgreSQL")
+con <- dbConnect(drv, dbname = "disruptive",
+                host = "zeno.lehre.hwr-berlin.de", port = 5432,
+                user = "consultant", password = "pgHWR2018")
+dbExistsTable(con, "twitter3") # check for the table
+```
+
+We want to obtain only the last 1000 tweets. Also, we need to make sure that we get only tweets that either has been retweeted or requoted in order to identify the influencers in the network.
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+twitter <- dbGetQuery(con, "select distinct text, tweet_created, influencer, influencer_quoted, user_name, retweeter_requoter  from twitter3 
+where text ~* '(btc|#eth|ether|bitcoin|ethereum)'
+AND (influencer != 'not retweeted post' OR influencer_quoted != 'not quoted post')
+order by tweet_created desc LIMIT 2000")
+str(twitter)
+```
+
+Short note about the regular expression in the SQL statement: we could search, for instance, for `eth` but this would find ex. "Ethiopian" or "something" so that we restrict this to `#eth` or a full name `Ether` or `Ethereum`.
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+sum(is.na(twitter$text)) # just a check
+```
+
+### Load libraries
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+library(igraph)
+library(visNetwork)
+library(dplyr)
+```
+
+### Assign user ids
+The graph analysis requires a very specific format:
+- The data needs to be separated into tables `Ties` and `Nodes`
+- The `nodes` should contain `id` as the first column and additional attributes such as `name` in the subsequent columns.
+- The `ties` represents the edges in a graph, that is why it requires a `weight` argument.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+user_df = twitter %>% distinct(user_name)
+user_df = user_df %>% mutate(user_id = 1:nrow(user_df))
+rbind(head(user_df), tail(user_df))
+```
+### Assign ids to Influencers
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+influencer_df = twitter %>% distinct(influencer_quoted) %>% filter(influencer_quoted != "not quoted post")
+colnames(influencer_df) = "influencer"
+influencer_df2 = twitter %>% distinct(influencer) %>% filter(influencer != "not retweeted post")
+influencer_df = influencer_df %>% bind_rows(influencer_df2)
+nrow(influencer_df)
+```
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+influencer_df
+```
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+influencer_df = influencer_df %>% mutate(influencer_id = 
+                                   seq(from = (1+nrow(user_df)), to = (nrow(influencer_df)+nrow(user_df)), by = 1)
+                                   )
+rbind(head(influencer_df), tail(influencer_df))
+```
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+influencer_as_users = influencer_df
+colnames(influencer_as_users) = c("user_name", "user_id")
+rbind(head(influencer_as_users), tail(influencer_as_users))
+```
+
+### Nodes Df
+Once again: it's crucial that the first column is the `id`, so we need to reorder the columns:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+nodes = bind_rows(user_df, influencer_as_users)
+colnames(nodes) = c("name", "id")
+nodes = nodes[, c("id", "name")]
+rbind(head(nodes), tail(nodes))
+```
+
+### Final influencer Df for Ties (=Edges)
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+final_influencer_df = twitter %>% inner_join(user_df, by = "user_name") %>% inner_join(influencer_df, by = "influencer")
+str(final_influencer_df)
+```
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+rbind(head(final_influencer_df, 1), tail(final_influencer_df, 1))
+```
+
+### Ties Df
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+ties = final_influencer_df %>% 
+          filter(influencer != retweeter_requoter) %>% # avoid to consider self-retweeting posts as influencers
+          filter(!is.na(influencer), !is.na(retweeter_requoter)) %>% # both must be not null
+          select(from = influencer_id, to = user_id) %>% # from, to
+        group_by(from, to) %>% count() %>% rename(weight = n) %>% # rename n as weight of the connection bw. from and to
+        arrange(-weight)
+nrow(ties)
+```
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+ties[1:20, ]
+```
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+str(nodes)
+```
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+length(unique(nodes$name))
+```
+
+We have some **duplicated user_names**, because some users were also influencers. We can delete the duplicates in the following way:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+nodes = nodes %>% distinct(name, .keep_all = TRUE) # .keep_all to keep user_id as well
+str(nodes)
+```
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+ties = ties %>% semi_join(nodes, by = c("from" = "id"))
+```
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+ties = ties %>% semi_join(nodes, by = c("to" = "id"))
+```
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+ties = na.omit(ties)
+```
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+nrow(ties)
+```
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+nrow(nodes)
+```
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+ties %>% anti_join(nodes, by = c("from" = "id"))
+```
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+ties %>% anti_join(nodes, by = c("to" = "id"))
+```
+
+## Graph
+Now, we can finally draw the graph and analyze the data interactively.
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+g <- graph_from_data_frame(ties, directed = TRUE, vertices = nodes)
+g
+```
+
+### Interactive plot
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+library(visNetwork)
+data <- toVisNetworkData(g) # convert igraph to visNetwork
+# print head of nodes and edges (another word for ties)
+data$nodes
+```
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+data$edges %>% arrange(-weight)
+```
+
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+visNetwork(nodes = data$nodes, edges = data$edges, width = 700, height = 500) %>%
+  visPhysics(stabilization = FALSE) %>% # creates the animation and hence boots up faster  since it doesn't wait till everything is loaded
+  visOptions(nodesIdSelection = TRUE, highlightNearest = TRUE) %>% visEdges(smooth = FALSE)
+```
+
+```{r echo=TRUE}
+top_influencers = data$edges %>% group_by(from) %>% count() %>% arrange(-n)
+top_influencers$from[1:20]
+```
+
+## Can we find some interesting patterns in the user's behavior?
+- it turns out that many `influencers` are only considered as such due to free giveaways and alleged "airdrops" of free cryptocurrency.
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+DT::datatable(twitter, filter = list(position = 'top', clear = TRUE),
+  options = list(search = list(caseInsensitive = TRUE, regex = TRUE), pageLength = 5))
+```
+
+## Which of the influencers are the most trending on Google and when?
+- Did people seek advice from influencers after Bitcoin crash? 
+- it's difficult to assess given that some followers don't necessarily have to google for the influencers, as they already follow them on Twitter.
+- Technicality: *since google allows to search only for 5 keywords at once and limits free API calls (number of requests), we need to do it sequentially and later merge the results into one interactive data table*.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+library(DT)
+keywords_top_influencers = top_influencers$from[1:5]
+gTrendsData_top5 <- gtrends(keyword = keywords_top_influencers, time = paste("2018-06-01", Sys.Date()))
+top5 <- gTrendsData_top5$interest_over_time[, c("date", "hits", "keyword")]
+Sys.sleep(120)
+```
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+keywords_top_influencers2 = top_influencers$from[6:10]
+gTrendsData_top6_10 <- gtrends(keyword = keywords_top_influencers2, time = paste("2018-06-01", Sys.Date()))
+top6_10 <- gTrendsData_top6_10$interest_over_time[, c("date", "hits", "keyword")]
+Sys.sleep(120)
+```
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+keywords_top_influencers3 = top_influencers$from[11:15]
+gTrendsData_top11_15 <- gtrends(keyword = keywords_top_influencers3, time = paste("2018-06-01", Sys.Date()))
+top11_15 <- gTrendsData_top11_15$interest_over_time[, c("date", "hits", "keyword")]
+Sys.sleep(120)
+```
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+keywords_top_influencers4 = top_influencers$from[16:20]
+gTrendsData_top16_20 <- gtrends(keyword = keywords_top_influencers4, time = paste("2018-06-01", Sys.Date()))
+top16_20 <- gTrendsData_top16_20$interest_over_time[, c("date", "hits", "keyword")]
+# merge DFs together
+top20 = rbind(top5, top6_10, top11_15, top16_20)
+DT::datatable(top20, filter = list(position = 'top', clear = TRUE),
+  options = list(search = list(caseInsensitive = TRUE, regex = TRUE), pageLength = 5))
+```
+
+```{r echo=TRUE}
+# poor attempt to do it more efficiently
+# x = top_influencers$from[1:10]
+# datTS_list = list()
+# for (i in 1:(length(x)/5)) {
+#   for (j in 1:(length(x)/5)) {
+#     gTrendsData <- gtrends(keyword = x[i:(i+4)], time = "2018-06-08 2018-06-11")
+#     datTS_list[[i]] <- gTrendsData$interest_over_time[, c("date", "hits", "keyword")]
+#     #print(paste(i, " iteration is done."))
+#     i = i+5
+#     #Sys.sleep(10)
+#   }
+#   if (length(datTS_list) >= length(x)) {
+#     break
+#   }
+# }
+```
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+# df = as.data.frame(data.table::rbindlist(datTS_list))
+# DT::datatable(df, filter = list(position = 'top', clear = TRUE),
+#  options = list(search = list(caseInsensitive = TRUE, regex = TRUE), pageLength = 5))
+```

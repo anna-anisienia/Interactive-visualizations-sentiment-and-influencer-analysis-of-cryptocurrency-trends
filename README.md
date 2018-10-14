@@ -1,4 +1,4 @@
-# Data Science Project 2
+# Interactive visualizations, sentiment and influencer analysis of cryptocurrency trends
 This project is about cryptocurrency analysis. In partcular:
 1. I scraped or retrieved Bitcoin and Ethereum related data from Social media (Reddit, Twitter), as well as from the News, Cryptocurrency values over time, etc.
 2. I wrote a script to continuously stream the data over 2 weeks and store it in PostgreSQL database (continuously appending new rows in the Spark Structured Streaming fashion)

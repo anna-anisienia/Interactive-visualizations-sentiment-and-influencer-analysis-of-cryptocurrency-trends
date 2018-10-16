@@ -28,12 +28,8 @@ app = dash.Dash(__name__)
 
 engine = create_engine('postgresql://username:password@server:port/database_name')
 connection = engine.connect()
-btc_reddit = pd.read_sql(sql = "select distinct title, 
-                         created_utc, \"SA_score_grouped\", \"SA_score\" from btc_reddit order by created_utc desc", 
-                         con = connection, index_col=None)
-eth_reddit = pd.read_sql(sql = "select distinct title, 
-                         created_utc, \"SA_score_grouped\", \"SA_score\" from eth_reddit order by created_utc desc", 
-                         con = connection, index_col=None)
+btc_reddit = pd.read_sql(sql = "select distinct title, created_utc, \"SA_score_grouped\", \"SA_score\" from btc_reddit order by created_utc desc", con = connection, index_col=None)
+eth_reddit = pd.read_sql(sql = "select distinct title, created_utc, \"SA_score_grouped\", \"SA_score\" from eth_reddit order by created_utc desc", con = connection, index_col=None)
 
 # to later display the interactive data table
 reddit = pd.concat([btc_reddit, eth_reddit], axis=0, join='outer', # to get UNION of rows, instead of intersection
@@ -491,9 +487,8 @@ app.layout = html.Div([html.H1('This dashboard shows current trends about Bitcoi
                                         )}
                                         ),
 # BTC/ETH values over time
-html.H3("You can also look at the recent development in the currency values. If you are interested in a specific time interval, \
-you can zoom in by selecting the desired period. If you click at the small house icon, you can reset the axis again."),
-                    dcc.Graph(id='scatterplot3',
+html.H3("You can also look at the recent development in the currency values. If you are interested in a specific time interval, you can zoom in by selecting the desired period. If you click at the small house icon, you can reset the axis again."),
+dcc.Graph(id='scatterplot3',
                     figure = {'data':[
                             go.Scatter(
                             x = btc_values_df.timestamp,
@@ -574,7 +569,7 @@ you can zoom in by selecting the desired period. If you click at the small house
 # BoW plot
 html.H3("Additionally, you can see the most common words that are used in all discussions around Bitcoin and Ethereum on diverse channels. \
 You can select the channel and the currency you are interested in from the dropdown menu on the left."),
-                    dcc.Graph(id='barplot4',
+dcc.Graph(id='barplot4',
                     figure = {'data':[
                     go.Bar(
                         x=generate_word_list(text_col= btc_reddit.title).word,

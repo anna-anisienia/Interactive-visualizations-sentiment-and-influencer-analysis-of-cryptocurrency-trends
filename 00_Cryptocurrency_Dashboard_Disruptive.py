@@ -567,8 +567,7 @@ dcc.Graph(id='scatterplot3',
                                         )}
                                         ),
 # BoW plot
-html.H3("Additionally, you can see the most common words that are used in all discussions around Bitcoin and Ethereum on diverse channels. \
-You can select the channel and the currency you are interested in from the dropdown menu on the left."),
+html.H3("Additionally, you can see the most common words that are used in all discussions around Bitcoin and Ethereum on diverse channels. You can select the channel and the currency you are interested in from the dropdown menu on the left."),
 dcc.Graph(id='barplot4',
                     figure = {'data':[
                     go.Bar(

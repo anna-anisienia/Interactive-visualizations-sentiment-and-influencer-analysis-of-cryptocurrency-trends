@@ -28,8 +28,12 @@ app = dash.Dash(__name__)
 
 engine = create_engine('postgresql://username:password@server:port/database_name')
 connection = engine.connect()
-btc_reddit = pd.read_sql(sql = "select distinct title, created_utc, \"SA_score_grouped\", \"SA_score\" from btc_reddit order by created_utc desc", con = connection, index_col=None)
-eth_reddit = pd.read_sql(sql = "select distinct title, created_utc, \"SA_score_grouped\", \"SA_score\" from eth_reddit order by created_utc desc", con = connection, index_col=None)
+btc_reddit = pd.read_sql(sql = "select distinct title, 
+                         created_utc, \"SA_score_grouped\", \"SA_score\" from btc_reddit order by created_utc desc", 
+                         con = connection, index_col=None)
+eth_reddit = pd.read_sql(sql = "select distinct title, 
+                         created_utc, \"SA_score_grouped\", \"SA_score\" from eth_reddit order by created_utc desc", 
+                         con = connection, index_col=None)
 
 # to later display the interactive data table
 reddit = pd.concat([btc_reddit, eth_reddit], axis=0, join='outer', # to get UNION of rows, instead of intersection
